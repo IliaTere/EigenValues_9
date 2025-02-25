@@ -29,7 +29,92 @@ bool is_three_diagonal(Args *arg)
             
     return true;
 }
-
+int improved_three_diagonal(Args *arg)
+{
+    double *a = arg->a;
+    int n = arg->n;
+    
+    // Allocate temporary storage
+    double *d = new double[n];   // Diagonal elements
+    double *e = new double[n-1]; // Off-diagonal elements
+    
+    // Householder reduction to tridiagonal form
+    for(int i = n-1; i > 0; i--) {
+        // Extract the column vector
+        double scale = 0.0;
+        for(int k = 0; k < i; k++) {
+            scale += fabs(a[k*n+i]);
+        }
+        
+        if(scale == 0.0) {
+            e[i-1] = a[(i-1)*n+i];
+            continue;
+        }
+        
+        double h = 0.0;
+        for(int k = 0; k < i; k++) {
+            a[k*n+i] /= scale;
+            h += a[k*n+i] * a[k*n+i];
+        }
+        
+        double f = a[(i-1)*n+i];
+        double g = (f >= 0.0) ? -sqrt(h) : sqrt(h);
+        e[i-1] = scale * g;
+        h -= f * g;
+        a[(i-1)*n+i] = f - g;
+        f = 0.0;
+        
+        // Apply Householder transformation
+        for(int j = 0; j < i; j++) {
+            a[i*n+j] = a[j*n+i] / h;
+            g = 0.0;
+            
+            for(int k = 0; k <= j; k++) {
+                g += a[j*n+k] * a[k*n+i];
+            }
+            for(int k = j+1; k < i; k++) {
+                g += a[k*n+j] * a[k*n+i];
+            }
+            
+            e[j] = g / h;
+            f += e[j] * a[j*n+i];
+        }
+        
+        double hh = f / (h + h);
+        for(int j = 0; j < i; j++) {
+            f = a[j*n+i];
+            g = e[j] - hh * f;
+            e[j] = g;
+            
+            for(int k = 0; k <= j; k++) {
+                a[j*n+k] -= f * e[k] + g * a[k*n+i];
+            }
+        }
+    }
+    
+    // Copy tridiagonal elements back to the matrix
+    for(int i = 0; i < n; i++) {
+        d[i] = a[i*n+i];
+        if(i < n-1) {
+            a[i*n+i+1] = e[i];
+            a[(i+1)*n+i] = e[i]; // Symmetry
+        }
+    }
+    
+    // Zero out the rest of the matrix
+    for(int i = 0; i < n; i++) {
+        for(int j = 0; j < n; j++) {
+            if(abs(i-j) > 1) {
+                a[i*n+j] = 0.0;
+            }
+        }
+        a[i*n+i] = d[i];
+    }
+    
+    delete[] d;
+    delete[] e;
+    return 0;
+}
 int three_diagonal(Args *arg)
 {
     double *a = arg->a, *xk = arg->xk;
@@ -62,51 +147,51 @@ int sign(double l)
 int sign_changes(Args* arg, double b)
 {
     const int n = arg->n;
-    const double* t = arg->a; // Трехдиагональная матрица в упакованном виде
+    double* matrix = arg->a; // Full matrix storage
     const double eps = arg->eps;
     const double norm = arg->norm;
-
+    
     if(n <= 0) return 0;
     
-    const double abs_eps = std::max(eps * norm, 1e-300);
+    // Extract diagonal and off-diagonal elements from the full matrix
+    double* diag = new double[n];       // Main diagonal
+    double* offdiag = new double[n-1];  // Off-diagonal elements
+    
+    for(int i = 0; i < n; i++) {
+        diag[i] = matrix[i*n+i];
+        if(i < n-1) {
+            offdiag[i] = matrix[i*n+i+1]; // Upper diagonal (equals lower diagonal for symmetric matrix)
+        }
+    }
+    
+    // Sturm sequence calculation (more numerically stable for symmetric tridiagonal matrices)
     int count = 0;
-    int current_sign = 1;
+    double d_prev = diag[0] - b;
     
-    // Первый элемент главной диагонали
-    double diag = t[0] - b;
+    // Count sign changes in the Sturm sequence
+    if(d_prev < 0) count++;
     
-    // Регуляризация с сохранением знака
-    if(fabs(diag) < abs_eps) {
-        diag = (diag >= 0) ? abs_eps : -abs_eps;
-    }
-    current_sign = (diag > 0) ? 1 : -1;
-
-    // Обработка трехдиагональной структуры
-    for(int i = 1; i < n; ++i) {
-        const int offset = 2*i - 1;
-        const double lower = t[offset];     // Элемент нижней диагонали
-        const double upper = t[offset + 1]; // Элемент верхней диагонали
-        
-        // Стабильное вычисление элемента разложения
-        diag = t[2*i] - b - (lower * upper) / diag;
-        
-        // Адаптивная регуляризация
-        const double adaptive_eps = std::max(abs_eps, 1e-15 * fabs(t[2*i]));
-        if(fabs(diag) < adaptive_eps) {
-            diag = (current_sign > 0) ? adaptive_eps : -adaptive_eps;
+    for(int i = 1; i < n; i++) {
+        // Calculate next term in the sequence
+        double d_curr;
+        if(fabs(d_prev) < eps * norm) {
+            // Avoid division by very small numbers
+            d_curr = diag[i] - b - fabs(offdiag[i-1]*offdiag[i-1]) / (eps * norm);
+        } else {
+            d_curr = diag[i] - b - (offdiag[i-1]*offdiag[i-1]) / d_prev;
         }
         
-        // Проверка изменения знака
-        const int new_sign = (diag > 0) ? 1 : -1;
-        if(new_sign != current_sign) {
-            count++;
-            current_sign = new_sign;
-        }
+        // Count sign changes
+        if(d_curr * d_prev < 0) count++;
+        
+        d_prev = d_curr;
     }
+    
+    delete[] diag;
+    delete[] offdiag;
     
     return count;
 }
-
 int solve(Args *arg)
 {
     int n = arg->n;
@@ -122,38 +207,41 @@ int solve(Args *arg)
         return 0;
     }
 
-    //Приведение к трехдиагональному виду
+    // Reduction to tridiagonal form
     double time = get_full_time();
     if(!is_three_diagonal(arg))
     {
-        if(three_diagonal(arg) == -1)
+        // Use the improved Householder reduction instead of rotation method
+        if(improved_three_diagonal(arg) == -1)
         {
-            cout << "Pr with three_diagonal" << endl;
+            cout << "Problem with tridiagonal reduction" << endl;
             return -1;
         }
-        for (int j = 0; j < n - 2; j++)
-            for(int i = j + 2; i < n; i++)
-            {
-                a[i * n + j] = 0;
-                a[j * n + i] = 0;
-            }
         arg->three_diagonal_time = get_full_time() - time;
     }
 
-    //Вычисляем b0
-    double b0 = arg->norm;
-    double ai = -b0, bi = b0, c = 0;
+    // Calculate eigenvalue bounds for the bisection method
+    double b0 = 0;
+    for(int i = 0; i < n; i++) {
+        double row_sum = 0;
+        for(int j = 0; j < n; j++) {
+            row_sum += fabs(a[i*n+j]);
+        }
+        b0 = std::max(b0, row_sum);
+    }
+    
+    double ai = -b0, bi = b0;
 
-    //Вычисляем собственные значения
+    // Find eigenvalues using bisection method
     time = get_full_time();
     for(int k = 0; k < n; k++)
     {
         bool is_end = false;
-        while(bi - ai > eps * norm and !is_end)
+        while(bi - ai > eps * norm && !is_end)
         {
-            c = (ai + bi) / 2;
+            double c = (ai + bi) / 2;
 
-            if(bi - c < EPS * norm or c - ai < EPS * norm)
+            if(bi - c < EPS * norm || c - ai < EPS * norm)
                 is_end = true;
 
             int n_minus = sign_changes(arg, c);
@@ -166,20 +254,24 @@ int solve(Args *arg)
         }
 
         double lambda = (ai + bi) / 2;
+        
+        // Determine multiplicity
         int s1 = sign_changes(arg, bi), s2 = sign_changes(arg, ai);
         int multiplicity = s1 - s2;
 
         if(multiplicity == 0)
         {
-            s1 = sign_changes(arg, bi + eps * norm);
-            s2 = sign_changes(arg, ai - eps * norm);
+            // Try a slightly wider interval
+            double delta = eps * norm * 10;
+            s1 = sign_changes(arg, bi + delta);
+            s2 = sign_changes(arg, ai - delta);
             multiplicity = s1 - s2;
-            if (multiplicity == 0) multiplicity++;
+            if (multiplicity == 0) multiplicity = 1;
         }
         
-        for(int i = k; i < k + multiplicity; i++)
+        // Store eigenvalues
+        for(int i = k; i < k + multiplicity && i < n; i++)
         {
-           if(i > n - 1) break;
             x[i] = lambda;
         }
 
